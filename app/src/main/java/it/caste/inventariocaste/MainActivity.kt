@@ -39,7 +39,23 @@ class MainActivity:Activity(){
  fun dp(n:Int)= (n*resources.displayMetrics.density).toInt()
  fun t(s:String,size:Float=16f)=TextView(this).apply{text=s;textSize=size;setTextColor(0xff302820.toInt());setPadding(4,dp(7),4,dp(7))}
  fun b(s:String,f:()->Unit)=Button(this).apply{text=s;setOnClickListener{f()}}
- fun page(title:String){val root=LinearLayout(this).apply{orientation=1;setBackgroundColor(0xfff7f3ef.toInt())};root.addView(TextView(this).apply{text=title;textSize=23f;setTextColor(-1);setBackgroundColor(0xff5d4037.toInt());setPadding(dp(16),dp(18),dp(16),dp(18))});val sc=ScrollView(this);box=LinearLayout(this).apply{orientation=1;setPadding(dp(14),dp(10),dp(14),dp(20))};sc.addView(box);root.addView(sc,LinearLayout.LayoutParams(-1,0,1f));root.setOnApplyWindowInsetsListener{v,w->v.setPadding(0,w.systemWindowInsetTop,0,w.systemWindowInsetBottom);w};setContentView(root)}
+  fun page(title:String){
+   val root=LinearLayout(this).apply{orientation=1;setBackgroundColor(0xfff7f3ef.toInt())}
+   val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setBackgroundColor(0xff5d4037.toInt());setPadding(dp(14),dp(10),dp(8),dp(10))}
+   header.addView(TextView(this).apply{text=title;textSize=23f;setTextColor(-1);setTypeface(null,android.graphics.Typeface.BOLD)},LinearLayout.LayoutParams(0,-2,1f))
+   val menu=TextView(this).apply{text="☰";textSize=28f;setTextColor(-1);gravity=Gravity.CENTER;setPadding(dp(12),dp(6),dp(12),dp(6))}
+   menu.setOnClickListener{v->
+    val pop=PopupMenu(this,v)
+    listOf("Home","Aggiungi articolo","Tutti gli articoli","Gestisci categorie","Storico acquisti","Scorte da reintegrare","Esporta inventario CSV").forEachIndexed{index,label->pop.menu.add(0,index, index,label)}
+    pop.setOnMenuItemClickListener{item->when(item.itemId){0->home();1->editor(null);2->items();3->categories();4->purchases();5->items(true);6->export()};true}
+    pop.show()
+   }
+   header.addView(menu);root.addView(header)
+   val sc=ScrollView(this);box=LinearLayout(this).apply{orientation=1;setPadding(dp(10),dp(10),dp(10),dp(20))};sc.addView(box)
+   root.addView(sc,LinearLayout.LayoutParams(-1,0,1f))
+   root.setOnApplyWindowInsetsListener{v,w->v.setPadding(0,w.systemWindowInsetTop,0,w.systemWindowInsetBottom);w}
+   setContentView(root)
+  }
  override fun onCreate(s:Bundle?){super.onCreate(s);db=DB(this);home()}
  fun iconFor(name:String,category:String):String {
   val v=(name+" "+category).lowercase(Locale.ROOT)
@@ -69,35 +85,47 @@ class MainActivity:Activity(){
    layoutParams=LinearLayout.LayoutParams(dp(size),dp(size))
   }
  }
- fun categoryGrid(){
-  val cats=db.cats();val counts=db.items().groupingBy{it.category}.eachCount()
-  cats.chunked(3).forEach{group->
-   val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
-   group.forEach{cat->
-    val tile=LinearLayout(this).apply{orientation=1;gravity=Gravity.CENTER;setPadding(dp(3),dp(8),dp(3),dp(8));setBackgroundColor(0xffffffff.toInt())}
-    tile.addView(TextView(this).apply{text=iconFor(cat,cat);textSize=32f;gravity=Gravity.CENTER})
-    tile.addView(t(cat,12f).apply{gravity=Gravity.CENTER;maxLines=2})
-    tile.addView(t("${counts[cat]?:0} articoli",11f).apply{gravity=Gravity.CENTER})
-    tile.setOnClickListener{items(category=cat)}
-    row.addView(tile,LinearLayout.LayoutParams(0,dp(130),1f).apply{setMargins(dp(2),dp(2),dp(2),dp(2))})
+  fun categoryPhoto(cat:String):View {
+   val key=when(cat.lowercase(Locale.ROOT)){
+    "attrezzatura e accessori"->"cat_attrezzatura"
+    "legname e materiali"->"cat_legname"
+    "macchinari"->"cat_macchinari"
+    "materiale di consumo"->"cat_consumo"
+    "materiale elettrico"->"cat_elettrico"
+    "minuteria"->"cat_minuteria"
+    "stampa 3d"->"cat_stampa3d"
+    "tornio"->"cat_tornio"
+    "utensili"->"cat_utensili"
+    "vernici"->"cat_vernici"
+    else->""
    }
-   repeat(3-group.size){row.addView(View(this),LinearLayout.LayoutParams(0,1,1f))}
-   box.addView(row)
+   val id=if(key.isNotEmpty())resources.getIdentifier(key,"drawable",packageName) else 0
+   if(id!=0)return ImageView(this).apply{setImageResource(id);scaleType=ImageView.ScaleType.FIT_CENTER;layoutParams=LinearLayout.LayoutParams(-1,dp(83))}
+   return TextView(this).apply{text=iconFor(cat,cat);textSize=32f;gravity=Gravity.CENTER;layoutParams=LinearLayout.LayoutParams(-1,dp(83))}
   }
- }
- fun home(){
-  page("Inventario Caste")
-  val all=db.items()
-  box.addView(t("Il tuo laboratorio, sempre sotto controllo.",18f))
-  box.addView(t("Articoli: ${all.size}     Scorte basse: ${all.count{it.min>0&&it.qty<=it.min}}",17f))
-  box.addView(b("＋ Aggiungi articolo"){editor(null)})
-  box.addView(b("▤ Tutti gli articoli"){items()})
-  box.addView(b("▦ Gestisci categorie"){categories()})
-  box.addView(b("€ Storico acquisti"){purchases()})
-  box.addView(b("⚠ Scorte da reintegrare"){items(true)})
-  box.addView(b("⇧ Esporta inventario CSV"){export()})
-  box.addView(t("Apri una categoria",18f));categoryGrid()
- }
+  fun categoryGrid(){
+   val cats=db.cats();val counts=db.items().groupingBy{it.category}.eachCount()
+   cats.chunked(3).forEach{group->
+    val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+    group.forEach{cat->
+     val tile=LinearLayout(this).apply{orientation=1;gravity=Gravity.CENTER;setPadding(dp(2),dp(5),dp(2),dp(5));setBackgroundColor(-1)}
+     tile.addView(categoryPhoto(cat))
+     tile.addView(t(cat,12f).apply{gravity=Gravity.CENTER;maxLines=2})
+     tile.addView(t("${counts[cat]?:0} articoli",11f).apply{gravity=Gravity.CENTER})
+     tile.setOnClickListener{items(category=cat)}
+     row.addView(tile,LinearLayout.LayoutParams(0,dp(158),1f).apply{setMargins(dp(2),dp(2),dp(2),dp(2))})
+    }
+    repeat(3-group.size){row.addView(View(this),LinearLayout.LayoutParams(0,1,1f))}
+    box.addView(row)
+   }
+  }
+  fun home(){
+   page("Inventario Caste")
+   val all=db.items()
+   box.addView(t("Articoli: ${all.size}     Scorte basse: ${all.count{it.min>0&&it.qty<=it.min}}",17f).apply{setTypeface(null,android.graphics.Typeface.BOLD)})
+   box.addView(t("Apri una categoria",18f))
+   categoryGrid()
+  }
  fun items(low:Boolean=false,category:String?=null){
   page(if(category!=null)category else if(low)"Scorte basse" else "Tutti gli articoli")
   val search=EditText(this).apply{hint="Cerca nome, categoria o posizione"};box.addView(search)
