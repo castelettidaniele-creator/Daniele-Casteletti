@@ -72,13 +72,61 @@ class MainActivity:Activity(){
    else -> "📦"
   }
  }
- fun imageFor(name:String,category:String,uri:String,size:Int):View {
-  if(uri.isNotBlank())try {
-   return ImageView(this).apply {
-    setImageURI(Uri.parse(uri));scaleType=ImageView.ScaleType.CENTER_CROP
-    layoutParams=LinearLayout.LayoutParams(dp(size),dp(size))
+ fun productPhotoId(name:String, category:String):Int {
+  val n=name.lowercase(Locale.ROOT)
+  // Il nome specifico ha precedenza sulla categoria generica.
+  val key=when {
+   listOf("cuscinet", "bearing").any{n.contains(it)} -> "prod_cuscinetto"
+   listOf("rondell", "washer").any{n.contains(it)} -> "prod_rondella"
+   listOf("dado", "bullon", "nut ").any{n.contains(it)} -> "prod_dado"
+   listOf("vite", "viti", "screw").any{n.contains(it)} -> "prod_vite"
+   listOf("fascett", "zip tie").any{n.contains(it)} -> "prod_fascetta"
+   listOf("connettor", "morsett", "spinott").any{n.contains(it)} -> "prod_connettore"
+   listOf("striscia led", "strip led", "led").any{n.contains(it)} -> "prod_led"
+   listOf("cavo", "filo elettric", "wire").any{n.contains(it)} -> "prod_cavo"
+   listOf("filament", "bobina", "pla", "petg", "abs").any{n.contains(it)} -> "prod_filamento"
+   listOf("stampante 3d", "printer 3d").any{n.contains(it)} -> "prod_stampante3d"
+   listOf("vernice", "smalto", "impregnant", "pittura", "lacca").any{n.contains(it)} -> "prod_vernice"
+   listOf("colla", "adesiv").any{n.contains(it)} -> "prod_colla"
+   listOf("carta abrasiv", "disco abrasiv", "abrasiv", "levig").any{n.contains(it)} -> "prod_abrasivo"
+   listOf("trapano", "avvitatore").any{n.contains(it)} -> "prod_trapano"
+   listOf("sega", "circolare").any{n.contains(it)} -> "prod_sega"
+   listOf("tavola", "asse", "pino", "listello", "legno", "multistrato").any{n.contains(it)} -> "prod_legno"
+   listOf("tornio", "mandrino").any{n.contains(it)} -> "prod_tornio"
+   listOf("scalpello", "martello", "fresa", "chiave", "utensil").any{n.contains(it)} -> "prod_utensile"
+   else -> when(category.lowercase(Locale.ROOT)) {
+    "minuteria" -> "prod_vite"
+    "materiale elettrico" -> "prod_cavo"
+    "legname e materiali" -> "prod_legno"
+    "vernici" -> "prod_vernice"
+    "stampa 3d" -> "prod_stampante3d"
+    "tornio" -> "prod_tornio"
+    "utensili" -> "prod_utensile"
+    "materiale di consumo" -> "prod_abrasivo"
+    "macchinari" -> "prod_macchinario"
+    "attrezzatura e accessori" -> "prod_trapano"
+    else -> ""
    }
-  }catch(_:Exception){}
+  }
+  return if(key.isNotEmpty())resources.getIdentifier(key,"drawable",packageName) else 0
+ }
+ fun imageFor(name:String,category:String,uri:String,size:Int):View {
+  val photoView=ImageView(this).apply {
+   scaleType=ImageView.ScaleType.FIT_CENTER
+   setBackgroundColor(0xffffffff.toInt())
+   layoutParams=LinearLayout.LayoutParams(dp(size),dp(size))
+  }
+  if(uri.isNotBlank()) {
+   try {
+    // Verifica accesso effettivo: un URI non leggibile non nasconde la foto automatica.
+    contentResolver.openInputStream(Uri.parse(uri))?.use { stream ->
+     val bitmap=android.graphics.BitmapFactory.decodeStream(stream)
+     if(bitmap!=null){photoView.setImageBitmap(bitmap);return photoView}
+    }
+   }catch(_:Exception){}
+  }
+  val id=productPhotoId(name,category)
+  if(id!=0){photoView.setImageResource(id);return photoView}
   return TextView(this).apply {
    text=iconFor(name,category);textSize=34f;gravity=Gravity.CENTER
    setBackgroundColor(0xffeee8df.toInt())
@@ -113,7 +161,7 @@ class MainActivity:Activity(){
      tile.addView(t(cat,12f).apply{gravity=Gravity.CENTER;maxLines=2})
      tile.addView(t("${counts[cat]?:0} articoli",11f).apply{gravity=Gravity.CENTER})
      tile.setOnClickListener{items(category=cat)}
-     row.addView(tile,LinearLayout.LayoutParams(0,dp(158),1f).apply{setMargins(dp(2),dp(2),dp(2),dp(2))})
+     row.addView(tile,LinearLayout.LayoutParams(0,dp(180),1f).apply{setMargins(dp(2),dp(2),dp(2),dp(2))})
     }
     repeat(3-group.size){row.addView(View(this),LinearLayout.LayoutParams(0,1,1f))}
     box.addView(row)
