@@ -170,6 +170,11 @@ class MainActivity:Activity(){
   fun categoryPhoto(cat:String):View {
    val key=when(cat.lowercase(Locale.ROOT)){
     "bicicletta"->"cat_bicicletta"
+    "bicicletta / mtb"->"cat_bici_mtb"
+    "bicicletta / da strada"->"cat_bici_strada"
+    "bicicletta / da passeggio uomo"->"cat_bici_uomo"
+    "bicicletta / da passeggio donna"->"cat_bici_donna"
+    "bicicletta / bambino"->"cat_bici_bambino"
     "legname e materiali"->"cat_legname"
     "fresa cnc"->"cat_macchinari"
     "materiale di consumo"->"cat_consumo"
@@ -211,8 +216,22 @@ class MainActivity:Activity(){
  fun bikeFolders(){
   page("Bicicletta")
   box.addView(t("Scegli una sottocartella",18f))
-  listOf("MTB","Da strada","Da passeggio uomo","Da passeggio donna","Bambino").forEach{folder->
-   box.addView(b("🚲  $folder"){items(category="Bicicletta / $folder")})
+  val folders=listOf("MTB","Da strada","Da passeggio uomo","Da passeggio donna","Bambino")
+  val all=db.items()
+  folders.chunked(3).forEach { group ->
+   val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+   group.forEach { folder ->
+    val category="Bicicletta / $folder"
+    val tile=LinearLayout(this).apply{orientation=1;gravity=Gravity.CENTER;setPadding(dp(2),dp(5),dp(2),dp(5));setBackgroundColor(-1)}
+    tile.addView(categoryPhoto(category))
+    tile.addView(t(folder,12f).apply{gravity=Gravity.CENTER;maxLines=2})
+    val count=all.count{db.belongs(it.id,category)}
+    tile.addView(t("$count articoli",11f).apply{gravity=Gravity.CENTER})
+    tile.setOnClickListener{items(category=category)}
+    row.addView(tile,LinearLayout.LayoutParams(0,dp(180),1f).apply{setMargins(dp(2),dp(2),dp(2),dp(2))})
+   }
+   repeat(3-group.size){row.addView(View(this),LinearLayout.LayoutParams(0,1,1f))}
+   box.addView(row)
   }
   box.addView(b("← Home"){home()})
  }
