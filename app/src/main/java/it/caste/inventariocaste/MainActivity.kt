@@ -11,6 +11,14 @@ import android.view.*
 import android.widget.*
 import java.text.SimpleDateFormat
 import java.util.*
+import android.graphics.BitmapFactory
+import android.graphics.Bitmap
+import android.util.Base64
+import org.json.JSONObject
+import org.json.JSONArray
+import java.net.URL
+import javax.net.ssl.HttpsURLConnection
+import java.io.ByteArrayOutputStream
 
 data class Item(val id:Long=0,val name:String="",val category:String="",val qty:Double=0.0,
  val unit:String="pz",val location:String="",val min:Double=0.0,val price:Double=0.0,
@@ -69,7 +77,7 @@ class DB(c:Context):SQLiteOpenHelper(c,"caste.db",null,2) {
  fun delete(id:Long){val d=writableDatabase;d.beginTransaction();try{d.delete("item_categories","item_id=?",arrayOf(id.toString()));d.delete("items","id=?",arrayOf(id.toString()));d.setTransactionSuccessful()}finally{d.endTransaction()}}
 }
 class MainActivity:Activity(){
- lateinit var db:DB; lateinit var box:LinearLayout; var photo=""; var editId=0L; var csv=""
+ lateinit var db:DB; lateinit var box:LinearLayout; var photo=""; var editId=0L; var csv=""; var scanPhoto:Uri?=null
  fun dp(n:Int)= (n*resources.displayMetrics.density).toInt()
  fun t(s:String,size:Float=16f)=TextView(this).apply{text=s;textSize=size;setTextColor(0xff302820.toInt());setPadding(4,dp(7),4,dp(7))}
  fun b(s:String,f:()->Unit)=Button(this).apply{text=s;setOnClickListener{f()}}
@@ -80,8 +88,8 @@ class MainActivity:Activity(){
    val menu=TextView(this).apply{text="☰";textSize=28f;setTextColor(-1);gravity=Gravity.CENTER;setPadding(dp(12),dp(6),dp(12),dp(6))}
    menu.setOnClickListener{v->
     val pop=PopupMenu(this,v)
-    listOf("Home","Aggiungi articolo","Tutti gli articoli","Gestisci categorie","Esporta inventario CSV").forEachIndexed{index,label->pop.menu.add(0,index, index,label)}
-    pop.setOnMenuItemClickListener{item->when(item.itemId){0->home();1->editor(null);2->items();3->categories();4->export()};true}
+    listOf("Home","Aggiungi articolo","Tutti gli articoli","Gestisci categorie","Esporta inventario CSV","Fotografa e conta").forEachIndexed{index,label->pop.menu.add(0,index, index,label)}
+    pop.setOnMenuItemClickListener{item->when(item.itemId){0->home();1->editor(null);2->items();3->categories();4->export();5->photoCount()};true}
     pop.show()
    }
    header.addView(menu);root.addView(header)
@@ -307,7 +315,85 @@ class MainActivity:Activity(){
   })
   box.addView(b("Annulla"){home()})
  }
- override fun onActivityResult(r:Int,c:Int,d:Intent?){super.onActivityResult(r,c,d);if(r==41&&c==RESULT_OK){d?.data?.let{u->try{contentResolver.takePersistableUriPermission(u,Intent.FLAG_GRANT_READ_URI_PERMISSION)}catch(_:Exception){};photo=u.toString();Toast.makeText(this,"Foto associata",Toast.LENGTH_SHORT).show()}};if(r==42&&c==RESULT_OK)d?.data?.let{contentResolver.openOutputStream(it)?.bufferedWriter()?.use{w->w.write(csv)};Toast.makeText(this,"CSV esportato",Toast.LENGTH_SHORT).show()}}
+ override fun onActivityResult(r:Int,c:Int,d:Intent?){super.onActivityResult(r,c,d);if(r==41&&c==RESULT_OK){d?.data?.let{u->try{contentResolver.takePersistableUriPermission(u,Intent.FLAG_GRANT_READ_URI_PERMISSION)}catch(_:Exception){};photo=u.toString();Toast.makeText(this,"Foto associata",Toast.LENGTH_SHORT).show()}};if(r==43&&c==RESULT_OK){d?.data?.let{scanPhoto=it;photoCount()}};if(r==42&&c==RESULT_OK)d?.data?.let{contentResolver.openOutputStream(it)?.bufferedWriter()?.use{w->w.write(csv)};Toast.makeText(this,"CSV esportato",Toast.LENGTH_SHORT).show()}}
+
+ data class ScanResult(val name:String,val qty:Int,val category:String)
+ fun photoCount(){
+  page("Fotografa e conta")
+  box.addView(t("Gemini suggerisce nomi, quantità e categorie. Controlla sempre il conteggio: nessun articolo sarà salvato senza conferma."))
+  val prefs=getSharedPreferences("gemini_config",MODE_PRIVATE)
+  val key=EditText(this).apply{hint="Chiave API Gemini (Google AI Studio)";setText(prefs.getString("key", ""));inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD}
+  box.addView(t("Chiave API Gemini gratuita (necessaria solo per l'analisi)"));box.addView(key)
+  box.addView(b("Salva chiave sul telefono"){prefs.edit().putString("key",key.text.toString().trim()).apply();Toast.makeText(this,"Chiave memorizzata localmente",Toast.LENGTH_SHORT).show()})
+  box.addView(b("📷 Scegli o scatta una fotografia"){
+   startActivityForResult(Intent(Intent.ACTION_GET_CONTENT).apply{type="image/*";addCategory(Intent.CATEGORY_OPENABLE)},43)
+  })
+  if(scanPhoto!=null){
+   val preview=ImageView(this).apply{setImageURI(scanPhoto);adjustViewBounds=true;maxHeight=dp(260)}
+   box.addView(preview)
+   val status=t("Pronto per analizzare")
+   box.addView(status)
+   box.addView(b("Analizza con Gemini"){
+    val apiKey=key.text.toString().trim()
+    if(apiKey.isBlank()){key.error="Inserisci la chiave API";return@b}
+    prefs.edit().putString("key",apiKey).apply()
+    val uri=scanPhoto?:return@b
+    status.text="Analisi in corso…"
+    Thread{
+     try{
+      val bitmap=contentResolver.openInputStream(uri)?.use{BitmapFactory.decodeStream(it)}?:error("Impossibile leggere la foto")
+      val maxSide=1280f;val scale=minOf(1f,maxSide/maxOf(bitmap.width,bitmap.height))
+      val resized=if(scale<1f)Bitmap.createScaledBitmap(bitmap,(bitmap.width*scale).toInt().coerceAtLeast(1),(bitmap.height*scale).toInt().coerceAtLeast(1),true) else bitmap
+      val bytes=ByteArrayOutputStream().also{resized.compress(Bitmap.CompressFormat.JPEG,80,it)}.toByteArray()
+      val encoded=Base64.encodeToString(bytes,Base64.NO_WRAP)
+      val cats=db.cats().filter{it!="Bicicletta"}.joinToString(", ")
+      val prompt="Analizza la foto di articoli di un laboratorio. Identifica gruppi di oggetti diversi e prova a contare solo quelli visibili. Non inventare misure o caratteristiche non verificabili. Restituisci SOLO JSON valido con struttura {\"items\":[{\"name\":\"nome italiano\",\"qty\":1,\"category\":\"Minuteria\"}]}. Categorie disponibili: $cats. Se il conteggio è incerto, proponi una stima che l'utente controllerà."
+      val body=JSONObject().put("contents",JSONArray().put(JSONObject().put("parts",JSONArray().put(JSONObject().put("text",prompt)).put(JSONObject().put("inline_data",JSONObject().put("mime_type","image/jpeg").put("data",encoded)))))).put("generationConfig",JSONObject().put("responseMimeType","application/json"))
+      val conn=(URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent").openConnection() as HttpsURLConnection)
+      conn.requestMethod="POST";conn.connectTimeout=20000;conn.readTimeout=60000;conn.doOutput=true
+      conn.setRequestProperty("Content-Type","application/json");conn.setRequestProperty("x-goog-api-key",apiKey)
+      conn.outputStream.use{it.write(body.toString().toByteArray(Charsets.UTF_8))}
+      val code=conn.responseCode
+      val response=(if(code in 200..299)conn.inputStream else conn.errorStream)?.bufferedReader()?.use{it.readText()}?:""
+      if(code !in 200..299)error("Gemini HTTP $code: "+response.take(240))
+      val raw=JSONObject(response).getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
+      val arr=JSONObject(raw).getJSONArray("items")
+      val results=(0 until arr.length()).map{val x=arr.getJSONObject(it);ScanResult(x.optString("name","Articolo"),x.optInt("qty",0).coerceAtLeast(0),x.optString("category","Minuteria"))}
+      runOnUiThread{showScanResults(results)}
+     }catch(e:Exception){runOnUiThread{status.text="Analisi non riuscita: ${e.message}. Puoi riprovare oppure inserire gli articoli manualmente."}}
+    }.start()
+   })
+  }
+  box.addView(b("Inserimento manuale"){showScanResults(listOf(ScanResult("",1,"Minuteria")))})
+ }
+ fun showScanResults(results:List<ScanResult>){
+  page("Controlla risultati")
+  box.addView(t("Correggi tutti i campi prima di confermare. I conteggi Gemini sono stime."))
+  val entries=mutableListOf<Triple<EditText,EditText,Spinner>>()
+  val cats=db.cats().filter{it!="Bicicletta"}
+  fun addEntry(r:ScanResult){
+   val name=EditText(this).apply{hint="Nome articolo";setText(r.name)}
+   val qty=EditText(this).apply{hint="Quantità";inputType=InputType.TYPE_CLASS_NUMBER;setText(r.qty.toString())}
+   val cat=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,cats);setSelection(cats.indexOf(r.category).coerceAtLeast(0))}
+   box.addView(t("Articolo ${entries.size+1}"));box.addView(name);box.addView(qty);box.addView(cat)
+   entries.add(Triple(name,qty,cat))
+  }
+  results.forEach{addEntry(it)}
+  box.addView(b("＋ Aggiungi altro oggetto"){addEntry(ScanResult("",1,"Minuteria"))})
+  box.addView(b("Conferma e salva"){
+   val parsed=entries.map{(name,qty,cat)->Triple(name.text.toString().trim(),qty.text.toString().toIntOrNull(),cat.selectedItem?.toString().orEmpty())}
+   if(parsed.any{it.first.isBlank()||it.second==null||it.second!!<0||it.third.isBlank()}){Toast.makeText(this,"Correggi nomi, quantità e categorie",Toast.LENGTH_LONG).show();return@b}
+   AlertDialog.Builder(this).setTitle("Conferma salvataggio").setMessage("Salvare ${parsed.size} articoli? Gli articoli con lo stesso nome e categoria saranno aggiunti alle scorte esistenti.")
+    .setNegativeButton("Annulla",null).setPositiveButton("Salva"){_,_->
+     parsed.forEach{(name,count,cat)->
+      val existing=db.items().firstOrNull{it.name.equals(name,true)&&db.belongs(it.id,cat)}
+      if(existing!=null)db.adjust(existing,count!!.toDouble()) else db.save(Item(name=name,category=cat,qty=count!!.toDouble()),setOf(cat))
+     }
+     Toast.makeText(this,"Articoli salvati",Toast.LENGTH_SHORT).show();items()
+    }.show()
+  })
+  box.addView(b("Annulla senza salvare"){home()})
+ }
  fun categories(){page("Categorie");categoryGrid();box.addView(b("＋ Nuova categoria"){val e=EditText(this).apply{hint="Nome categoria"};AlertDialog.Builder(this).setTitle("Nuova categoria").setView(e).setNegativeButton("Annulla",null).setPositiveButton("Salva"){_,_->if(e.text.isNotBlank()){db.addCat(e.text.toString());categories()}}.show()});box.addView(b("← Home"){home()})}
  fun export(){
   csv=buildString{
