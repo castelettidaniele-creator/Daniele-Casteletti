@@ -113,13 +113,21 @@ class MainActivity:Activity(){
  private val driveScope="https://www.googleapis.com/auth/drive.appdata"
  private val driveFilename="inventario_caste_condiviso_v1.json"
  private val driveSignInCode=8188
- private fun syncDrive(){
+ private val autoSyncHandler=android.os.Handler(android.os.Looper.getMainLooper())
+ private var driveBusy=false
+ private var autoSyncStarted=false
+ private val autoSyncTick=object:Runnable{
+  override fun run(){
+   if(!isFinishing){syncDrive(true);autoSyncHandler.postDelayed(this,60000)}
+  }
+ }
+ private fun syncDrive(silent:Boolean=false){
   val scope=Scope(driveScope)
   val account=GoogleSignIn.getLastSignedInAccount(this)
   if(account==null || !GoogleSignIn.hasPermissions(account,scope)){
    val opts=GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN).requestEmail().requestScopes(scope).build()
-   startActivityForResult(GoogleSignIn.getClient(this,opts).signInIntent,driveSignInCode)
-  }else doDriveSync(account)
+   if(!silent)startActivityForResult(GoogleSignIn.getClient(this,opts).signInIntent,driveSignInCode)
+  }else doDriveSync(account,silent)
  }
  private fun requestDrive(method:String,url:String,token:String,body:String?=null,contentType:String="application/json"):String{
   val conn=URL(url).openConnection() as HttpURLConnection
@@ -133,8 +141,9 @@ class MainActivity:Activity(){
   return response
  }
  private fun digest(text:String):String=MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8)).joinToString(""){ "%02x".format(it) }
- private fun doDriveSync(account:GoogleSignInAccount){
-  Toast.makeText(this,"Controllo Google Drive…",Toast.LENGTH_SHORT).show()
+ private fun doDriveSync(account:GoogleSignInAccount,silent:Boolean=false){
+  synchronized(this){if(driveBusy)return;driveBusy=true}
+  if(!silent)Toast.makeText(this,"Controllo Google Drive…",Toast.LENGTH_SHORT).show()
   Thread{
    try{
     val token=GoogleAuthUtil.getToken(this,account.account?:error("Account Google non disponibile"),"oauth2:$driveScope")
@@ -156,12 +165,17 @@ class MainActivity:Activity(){
      // Non sovrascrivere un inventario iniziale non vuoto senza conferma.
      if(lastLocal==null && db.items().isNotEmpty())error("Inventario locale non vuoto: importazione automatica bloccata per sicurezza")
      runOnUiThread{
-      AlertDialog.Builder(this).setTitle("Dati su Google Drive")
-       .setMessage("Sono disponibili dati su Drive. Importarli sul telefono? Verrà creata una copia di sicurezza locale.")
-       .setNegativeButton("Annulla",null).setPositiveButton("Importa"){_,_->
-        try{importSharedJson(remote);val newLocal=sharedSnapshot().toString();prefs.edit().putString("local_hash",digest(JSONObject(newLocal).toString())).putString("remote_hash",remoteHash).apply();home();Toast.makeText(this,"Dati ricevuti da Drive",Toast.LENGTH_LONG).show()}
-        catch(e:Exception){AlertDialog.Builder(this).setMessage("Importazione fallita: ${e.message}").setPositiveButton("OK",null).show()}
-       }.show()
+      if(silent){
+       try{importSharedJson(remote);val newLocal=sharedSnapshot().toString();prefs.edit().putString("local_hash",digest(JSONObject(newLocal).toString())).putString("remote_hash",remoteHash).apply();home()}
+       catch(e:Exception){AlertDialog.Builder(this).setTitle("Sincronizzazione: importazione fallita").setMessage(e.message?:"Errore").setPositiveButton("OK",null).show()}
+      }else{
+       AlertDialog.Builder(this).setTitle("Dati su Google Drive")
+        .setMessage("Sono disponibili dati su Drive. Importarli sul telefono? Verrà creata una copia di sicurezza locale.")
+        .setNegativeButton("Annulla",null).setPositiveButton("Importa"){_,_->
+         try{importSharedJson(remote);val newLocal=sharedSnapshot().toString();prefs.edit().putString("local_hash",digest(JSONObject(newLocal).toString())).putString("remote_hash",remoteHash).apply();home();Toast.makeText(this,"Dati ricevuti da Drive",Toast.LENGTH_LONG).show()}
+         catch(e:Exception){AlertDialog.Builder(this).setMessage("Importazione fallita: ${e.message}").setPositiveButton("OK",null).show()}
+        }.show()
+      }
      }
     }else if(remote==null || localChanged){
      val url=if(fileId==null)"https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id" else "https://www.googleapis.com/upload/drive/v3/files/$fileId?uploadType=media"
@@ -171,12 +185,13 @@ class MainActivity:Activity(){
       requestDrive("POST",url,token,body,"multipart/related; boundary=$boundary")
      }else requestDrive("PATCH",url,token,local)
      prefs.edit().putString("local_hash",localHash).putString("remote_hash",localHash).apply()
-     runOnUiThread{Toast.makeText(this,"Dati inviati a Google Drive",Toast.LENGTH_LONG).show()}
+     runOnUiThread{if(!silent)Toast.makeText(this,"Dati inviati a Google Drive",Toast.LENGTH_LONG).show()}
     }else{
      prefs.edit().putString("local_hash",localHash).putString("remote_hash",remoteHash).apply()
-     runOnUiThread{Toast.makeText(this,"Inventario già aggiornato",Toast.LENGTH_LONG).show()}
+     runOnUiThread{if(!silent)Toast.makeText(this,"Inventario già aggiornato",Toast.LENGTH_LONG).show()}
     }
-   }catch(e:Exception){runOnUiThread{AlertDialog.Builder(this).setTitle("Sincronizzazione non riuscita").setMessage(e.message?:"Errore sconosciuto").setPositiveButton("OK",null).show()}}
+   }catch(e:Exception){runOnUiThread{if(!silent || (e.message?:"").contains("Modifiche presenti"))AlertDialog.Builder(this).setTitle("Sincronizzazione non riuscita").setMessage(e.message?:"Errore sconosciuto").setPositiveButton("OK",null).show()}}
+   finally{synchronized(this){driveBusy=false}}
   }.start()
  }
  private val exportSharedCode=8171
@@ -283,6 +298,11 @@ class MainActivity:Activity(){
   }catch(e:Exception){AlertDialog.Builder(this).setTitle("Operazione non riuscita").setMessage(e.message?:"Errore sconosciuto").setPositiveButton("OK",null).show()}
  }
  override fun onCreate(s:Bundle?){super.onCreate(s);db=DB(this);home()}
+ override fun onResume(){super.onResume();if(::db.isInitialized){
+  if(!autoSyncStarted){autoSyncStarted=true;autoSyncHandler.postDelayed(autoSyncTick,5000)}
+  else autoSyncHandler.postDelayed({syncDrive(true)},2000)
+ }}
+ override fun onDestroy(){autoSyncHandler.removeCallbacks(autoSyncTick);super.onDestroy()}
  fun iconFor(name:String,category:String):String {
   val v=(name+" "+category).lowercase(Locale.ROOT)
   return when {
