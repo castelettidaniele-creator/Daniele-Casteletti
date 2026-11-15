@@ -19,6 +19,16 @@ import org.json.JSONArray
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 import java.io.ByteArrayOutputStream
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInClient
+import com.google.android.gms.auth.GoogleAuthUtil
+import com.google.android.gms.common.api.Scope
+import com.google.android.gms.common.api.ApiException
+import java.security.MessageDigest
+import java.net.HttpURLConnection
+import java.net.URLEncoder
 
 data class Item(val id:Long=0,val name:String="",val category:String="",val qty:Double=0.0,
  val unit:String="pz",val location:String="",val min:Double=0.0,val price:Double=0.0,
@@ -88,8 +98,8 @@ class MainActivity:Activity(){
    val menu=TextView(this).apply{text="☰";textSize=28f;setTextColor(-1);gravity=Gravity.CENTER;setPadding(dp(12),dp(6),dp(12),dp(6))}
    menu.setOnClickListener{v->
     val pop=PopupMenu(this,v)
-    listOf("Home","Aggiungi articolo","Tutti gli articoli","Gestisci categorie","Esporta inventario CSV","Fotografa e conta","Esporta dati condivisi JSON","Importa dati condivisi JSON").forEachIndexed{index,label->pop.menu.add(0,index, index,label)}
-    pop.setOnMenuItemClickListener{item->when(item.itemId){0->home();1->editor(null);2->items();3->categories();4->export();5->photoCount();6->exportShared();7->importShared()};true}
+    listOf("Home","Aggiungi articolo","Tutti gli articoli","Gestisci categorie","Esporta inventario CSV","Fotografa e conta","Esporta dati condivisi JSON","Importa dati condivisi JSON","Sincronizza Google Drive").forEachIndexed{index,label->pop.menu.add(0,index, index,label)}
+    pop.setOnMenuItemClickListener{item->when(item.itemId){0->home();1->editor(null);2->items();3->categories();4->export();5->photoCount();6->exportShared();7->importShared();8->syncDrive()};true}
     pop.show()
    }
    header.addView(menu);root.addView(header)
@@ -98,6 +108,75 @@ class MainActivity:Activity(){
    root.setOnApplyWindowInsetsListener{v,w->v.setPadding(0,w.systemWindowInsetTop,0,w.systemWindowInsetBottom);w}
    setContentView(root)
   }
+ private val driveScope="https://www.googleapis.com/auth/drive.appdata"
+ private val driveFilename="inventario_caste_condiviso_v1.json"
+ private val driveSignInCode=8188
+ private fun syncDrive(){
+  val scope=Scope(driveScope)
+  val account=GoogleSignIn.getLastSignedInAccount(this)
+  if(account==null || !GoogleSignIn.hasPermissions(account,scope)){
+   val opts=GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN).requestEmail().requestScopes(scope).build()
+   startActivityForResult(GoogleSignIn.getClient(this,opts).signInIntent,driveSignInCode)
+  }else doDriveSync(account)
+ }
+ private fun requestDrive(method:String,url:String,token:String,body:String?=null,contentType:String="application/json"):String{
+  val conn=URL(url).openConnection() as HttpURLConnection
+  conn.requestMethod=method;conn.connectTimeout=20000;conn.readTimeout=30000
+  conn.setRequestProperty("Authorization","Bearer $token")
+  if(body!=null){conn.doOutput=true;conn.setRequestProperty("Content-Type",contentType);conn.outputStream.use{it.write(body.toByteArray(Charsets.UTF_8))}}
+  val code=conn.responseCode
+  val response=(if(code in 200..299)conn.inputStream else conn.errorStream)?.bufferedReader()?.use{it.readText()}?:""
+  conn.disconnect()
+  if(code !in 200..299)error("Google Drive HTTP $code: ${response.take(200)}")
+  return response
+ }
+ private fun digest(text:String):String=MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8)).joinToString(""){ "%02x".format(it) }
+ private fun doDriveSync(account:GoogleSignInAccount){
+  Toast.makeText(this,"Controllo Google Drive…",Toast.LENGTH_SHORT).show()
+  Thread{
+   try{
+    val token=GoogleAuthUtil.getToken(this,account.account?:error("Account Google non disponibile"),"oauth2:$driveScope")
+    val listUrl="https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name),nextPageToken&pageSize=100&q="+URLEncoder.encode("name = '$driveFilename'","UTF-8")
+    val list=JSONObject(requestDrive("GET",listUrl,token)).getJSONArray("files")
+    require(list.length()<=1){"Trovati più inventari condivisi: sincronizzazione annullata"}
+    val fileId=if(list.length()==1)list.getJSONObject(0).getString("id") else null
+    val local=sharedSnapshot().toString()
+    val localHash=digest(JSONObject(local).toString())
+    val prefs=getSharedPreferences("drive_sync",MODE_PRIVATE)
+    val lastLocal=prefs.getString("local_hash",null)
+    val lastRemote=prefs.getString("remote_hash",null)
+    val remote=if(fileId!=null)requestDrive("GET","https://www.googleapis.com/drive/v3/files/$fileId?alt=media",token) else null
+    val remoteHash=remote?.let{digest(JSONObject(it).toString())}
+    val localChanged=lastLocal!=null && localHash!=lastLocal
+    val remoteChanged=lastRemote!=null && remoteHash!=lastRemote
+    if(localChanged && remoteChanged)error("Modifiche presenti su entrambi i dispositivi. Nessun dato sovrascritto: risoluzione conflitti necessaria.")
+    if(remote!=null && (lastLocal==null || remoteChanged) && !localChanged){
+     // Non sovrascrivere un inventario iniziale non vuoto senza conferma.
+     if(lastLocal==null && db.items().isNotEmpty())error("Inventario locale non vuoto: importazione automatica bloccata per sicurezza")
+     runOnUiThread{
+      AlertDialog.Builder(this).setTitle("Dati su Google Drive")
+       .setMessage("Sono disponibili dati su Drive. Importarli sul telefono? Verrà creata una copia di sicurezza locale.")
+       .setNegativeButton("Annulla",null).setPositiveButton("Importa"){_,_->
+        try{importSharedJson(remote);val newLocal=sharedSnapshot().toString();prefs.edit().putString("local_hash",digest(JSONObject(newLocal).toString())).putString("remote_hash",remoteHash).apply();home();Toast.makeText(this,"Dati ricevuti da Drive",Toast.LENGTH_LONG).show()}
+        catch(e:Exception){AlertDialog.Builder(this).setMessage("Importazione fallita: ${e.message}").setPositiveButton("OK",null).show()}
+       }.show()
+     }
+    }else if(remote==null || localChanged){
+     val url=if(fileId==null)"https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id" else "https://www.googleapis.com/upload/drive/v3/files/$fileId?uploadType=media"
+     if(fileId==null){
+      val boundary="caste_sync_boundary"
+      val body="--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"+JSONObject().put("name",driveFilename).put("parents",JSONArray().put("appDataFolder")).toString()+"\r\n--$boundary\r\nContent-Type: application/json\r\n\r\n"+local+"\r\n--$boundary--\r\n"
+      requestDrive("POST",url,token,body,"multipart/related; boundary=$boundary")
+     }else requestDrive("PATCH",url,token,local)
+     prefs.edit().putString("local_hash",localHash).putString("remote_hash",localHash).apply()
+     runOnUiThread{Toast.makeText(this,"Dati inviati a Google Drive",Toast.LENGTH_LONG).show()}
+    }else{
+     prefs.edit().putString("local_hash",localHash).putString("remote_hash",remoteHash).apply()
+     runOnUiThread{Toast.makeText(this,"Inventario già aggiornato",Toast.LENGTH_LONG).show()}
+    }
+   }catch(e:Exception){runOnUiThread{AlertDialog.Builder(this).setTitle("Sincronizzazione non riuscita").setMessage(e.message?:"Errore sconosciuto").setPositiveButton("OK",null).show()}}
+  }.start()
+ }
  private val exportSharedCode=8171
  private val importSharedCode=8172
  fun exportShared(){
@@ -155,6 +234,10 @@ class MainActivity:Activity(){
  @Deprecated("Activity result API")
  override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){
   super.onActivityResult(requestCode,resultCode,data)
+  if(requestCode==driveSignInCode){
+   if(resultCode==RESULT_OK){try{val account=GoogleSignIn.getSignedInAccountFromIntent(data).getResult(ApiException::class.java);doDriveSync(account)}catch(e:Exception){Toast.makeText(this,"Accesso Google non riuscito: ${e.message}",Toast.LENGTH_LONG).show()}}
+   return
+  }
   if(requestCode==41 && resultCode==RESULT_OK){data?.data?.let{u->try{contentResolver.takePersistableUriPermission(u,Intent.FLAG_GRANT_READ_URI_PERMISSION)}catch(_:Exception){};photo=u.toString();Toast.makeText(this,"Foto associata",Toast.LENGTH_SHORT).show()};return}
   if(requestCode==43 && resultCode==RESULT_OK){data?.data?.let{scanPhoto=it;photoCount()};return}
   if(requestCode==42 && resultCode==RESULT_OK){data?.data?.let{contentResolver.openOutputStream(it)?.bufferedWriter()?.use{w->w.write(csv)};Toast.makeText(this,"CSV esportato",Toast.LENGTH_SHORT).show()};return}
