@@ -237,7 +237,17 @@ class MainActivity:Activity(){
  override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){
   super.onActivityResult(requestCode,resultCode,data)
   if(requestCode==driveSignInCode){
-   if(resultCode==RESULT_OK){try{val account=GoogleSignIn.getSignedInAccountFromIntent(data).getResult(ApiException::class.java);doDriveSync(account)}catch(e:Exception){Toast.makeText(this,"Accesso Google non riuscito: ${e.message}",Toast.LENGTH_LONG).show()}}
+   if(resultCode==RESULT_OK){
+    try{
+     val account=GoogleSignIn.getSignedInAccountFromIntent(data).getResult(ApiException::class.java)
+     Toast.makeText(this,"Account Google selezionato. Avvio controllo Drive…",Toast.LENGTH_LONG).show()
+     doDriveSync(account)
+    }catch(e:Exception){
+     AlertDialog.Builder(this).setTitle("Accesso Google non riuscito").setMessage(e.message?:"Errore sconosciuto").setPositiveButton("OK",null).show()
+    }
+   }else{
+    AlertDialog.Builder(this).setTitle("Google Drive non avviato").setMessage("La selezione dell'account non è stata completata (codice: $resultCode). Nessun dato è stato trasferito.").setPositiveButton("OK",null).show()
+   }
    return
   }
   if(requestCode==41 && resultCode==RESULT_OK){data?.data?.let{u->try{contentResolver.takePersistableUriPermission(u,Intent.FLAG_GRANT_READ_URI_PERMISSION)}catch(_:Exception){};photo=u.toString();Toast.makeText(this,"Foto associata",Toast.LENGTH_SHORT).show()};return}
