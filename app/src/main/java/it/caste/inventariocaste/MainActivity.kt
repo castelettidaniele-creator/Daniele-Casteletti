@@ -513,7 +513,7 @@ class MainActivity:Activity(){
       val cats=db.cats().filter{it!="Bicicletta"}.joinToString(", ")
       val prompt="Analizza la foto di articoli di un laboratorio. Identifica gruppi di oggetti diversi e prova a contare solo quelli visibili. Non inventare misure o caratteristiche non verificabili. Restituisci SOLO JSON valido con struttura {\"items\":[{\"name\":\"nome italiano\",\"qty\":1,\"category\":\"Minuteria\"}]}. Categorie disponibili: $cats. Se il conteggio è incerto, proponi una stima che l'utente controllerà."
       val body=JSONObject().put("contents",JSONArray().put(JSONObject().put("parts",JSONArray().put(JSONObject().put("text",prompt)).put(JSONObject().put("inline_data",JSONObject().put("mime_type","image/jpeg").put("data",encoded)))))).put("generationConfig",JSONObject().put("responseMimeType","application/json"))
-      val conn=(URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent").openConnection() as HttpsURLConnection)
+      val conn=(URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent").openConnection() as HttpsURLConnection)
       conn.requestMethod="POST";conn.connectTimeout=20000;conn.readTimeout=60000;conn.doOutput=true
       conn.setRequestProperty("Content-Type","application/json");conn.setRequestProperty("x-goog-api-key",apiKey)
       conn.outputStream.use{it.write(body.toString().toByteArray(Charsets.UTF_8))}
