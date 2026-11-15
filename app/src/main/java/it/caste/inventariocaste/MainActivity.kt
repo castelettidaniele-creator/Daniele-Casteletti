@@ -237,16 +237,38 @@ class MainActivity:Activity(){
  override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){
   super.onActivityResult(requestCode,resultCode,data)
   if(requestCode==driveSignInCode){
-   if(resultCode==RESULT_OK){
-    try{
-     val account=GoogleSignIn.getSignedInAccountFromIntent(data).getResult(ApiException::class.java)
-     Toast.makeText(this,"Account Google selezionato. Avvio controllo Drive…",Toast.LENGTH_LONG).show()
+   // Google Sign-In can return RESULT_CANCELED while carrying a useful API status.
+   // Inspect the returned task even when resultCode is 0.
+   try{
+    val task=GoogleSignIn.getSignedInAccountFromIntent(data)
+    val account=task.getResult(ApiException::class.java)
+    if(account==null){
+     AlertDialog.Builder(this).setTitle("Google Drive: accesso incompleto")
+      .setMessage("Google non ha restituito un account (codice Android: $resultCode). Nessun dato trasferito.")
+      .setPositiveButton("OK",null).show()
+    }else if(!GoogleSignIn.hasPermissions(account,Scope(driveScope))){
+     AlertDialog.Builder(this).setTitle("Permesso Google Drive mancante")
+      .setMessage("Account selezionato, ma il permesso drive.appdata non è stato concesso. Nessun dato trasferito.")
+      .setPositiveButton("OK",null).show()
+    }else{
+     Toast.makeText(this,"Account autorizzato. Controllo Drive…",Toast.LENGTH_LONG).show()
      doDriveSync(account)
-    }catch(e:Exception){
-     AlertDialog.Builder(this).setTitle("Accesso Google non riuscito").setMessage(e.message?:"Errore sconosciuto").setPositiveButton("OK",null).show()
     }
-   }else{
-    AlertDialog.Builder(this).setTitle("Google Drive non avviato").setMessage("La selezione dell'account non è stata completata (codice: $resultCode). Nessun dato è stato trasferito.").setPositiveButton("OK",null).show()
+   }catch(e:ApiException){
+    val hint=when(e.statusCode){
+     10->"Configurazione OAuth non valida (DEVELOPER_ERROR): controllare SHA-1 della firma APK, package name e client OAuth Android in Google Cloud."
+     12500->"Accesso Google non configurato correttamente: verificare le impostazioni OAuth del progetto."
+     12501->"Selezione account annullata da Google o dall'utente."
+     7->"Problema di rete durante l'accesso Google."
+     else->"Verificare autorizzazioni Google, configurazione OAuth e servizi Google Play."
+    }
+    AlertDialog.Builder(this).setTitle("Errore accesso Google Drive")
+     .setMessage("Codice Android: $resultCode\nCodice Google: ${e.statusCode}\n$hint\n\nNessun dato trasferito.")
+     .setPositiveButton("OK",null).show()
+   }catch(e:Exception){
+    AlertDialog.Builder(this).setTitle("Errore accesso Google Drive")
+     .setMessage("Codice Android: $resultCode\n${e.javaClass.simpleName}: ${e.message ?: "Nessun dettaglio"}\nNessun dato trasferito.")
+     .setPositiveButton("OK",null).show()
    }
    return
   }
