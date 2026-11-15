@@ -1,5 +1,7 @@
 package it.caste.inventariocaste
 
+import androidx.core.content.FileProvider
+import java.io.File
 import android.app.*
 import android.os.Bundle
 import android.content.*
@@ -87,7 +89,7 @@ class DB(c:Context):SQLiteOpenHelper(c,"caste.db",null,2) {
  fun delete(id:Long){val d=writableDatabase;d.beginTransaction();try{d.delete("item_categories","item_id=?",arrayOf(id.toString()));d.delete("items","id=?",arrayOf(id.toString()));d.setTransactionSuccessful()}finally{d.endTransaction()}}
 }
 class MainActivity:Activity(){
- lateinit var db:DB; lateinit var box:LinearLayout; var photo=""; var editId=0L; var csv=""; var scanPhoto:Uri?=null
+ lateinit var db:DB; lateinit var box:LinearLayout; var photo=""; var editId=0L; var csv=""; var scanPhoto:Uri?=null; var pendingCameraUri:Uri?=null
  fun dp(n:Int)= (n*resources.displayMetrics.density).toInt()
  fun t(s:String,size:Float=16f)=TextView(this).apply{text=s;textSize=size;setTextColor(0xff302820.toInt());setPadding(4,dp(7),4,dp(7))}
  fun b(s:String,f:()->Unit)=Button(this).apply{text=s;setOnClickListener{f()}}
@@ -240,6 +242,7 @@ class MainActivity:Activity(){
   }
   if(requestCode==41 && resultCode==RESULT_OK){data?.data?.let{u->try{contentResolver.takePersistableUriPermission(u,Intent.FLAG_GRANT_READ_URI_PERMISSION)}catch(_:Exception){};photo=u.toString();Toast.makeText(this,"Foto associata",Toast.LENGTH_SHORT).show()};return}
   if(requestCode==43 && resultCode==RESULT_OK){data?.data?.let{scanPhoto=it;photoCount()};return}
+  if(requestCode==44){if(resultCode==RESULT_OK){scanPhoto=pendingCameraUri;photoCount()}else{pendingCameraUri=null};return}
   if(requestCode==42 && resultCode==RESULT_OK){data?.data?.let{contentResolver.openOutputStream(it)?.bufferedWriter()?.use{w->w.write(csv)};Toast.makeText(this,"CSV esportato",Toast.LENGTH_SHORT).show()};return}
   if(resultCode!=Activity.RESULT_OK || data?.data==null)return
   try{
@@ -474,7 +477,19 @@ class MainActivity:Activity(){
   val key=EditText(this).apply{hint="Chiave API Gemini (Google AI Studio)";setText(prefs.getString("key", ""));inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD}
   box.addView(t("Chiave API Gemini gratuita (necessaria solo per l'analisi)"));box.addView(key)
   box.addView(b("Salva chiave sul telefono"){prefs.edit().putString("key",key.text.toString().trim()).apply();Toast.makeText(this,"Chiave memorizzata localmente",Toast.LENGTH_SHORT).show()})
-  box.addView(b("📷 Scegli o scatta una fotografia"){
+  box.addView(b("📷 Scatta fotografia"){
+   try{
+    val file=File.createTempFile("inventario_foto_", ".jpg",cacheDir)
+    val uri=FileProvider.getUriForFile(this,"${packageName}.fileprovider",file)
+    pendingCameraUri=uri
+    val intent=Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply{
+     putExtra(android.provider.MediaStore.EXTRA_OUTPUT,uri)
+     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+    }
+    startActivityForResult(intent,44)
+   }catch(e:Exception){Toast.makeText(this,"Fotocamera non disponibile: ${e.message}",Toast.LENGTH_LONG).show()}
+  })
+  box.addView(b("🖼 Scegli dalla galleria"){
    startActivityForResult(Intent(Intent.ACTION_GET_CONTENT).apply{type="image/*";addCategory(Intent.CATEGORY_OPENABLE)},43)
   })
   if(scanPhoto!=null){

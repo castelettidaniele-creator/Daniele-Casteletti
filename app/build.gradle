@@ -14,4 +14,4 @@ android {
  defaultConfig { applicationId 'it.caste.inventariocaste'; minSdk 23; targetSdk 35; versionCode 1; versionName '1.0' }
 }
 
-dependencies { implementation "com.google.android.gms:play-services-auth:21.3.0" }
+dependencies { implementation "androidx.core:core:1.13.1"; implementation "com.google.android.gms:play-services-auth:21.3.0" }
