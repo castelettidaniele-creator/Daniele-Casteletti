@@ -19,8 +19,6 @@ import org.json.JSONArray
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 import java.io.ByteArrayOutputStream
-import java.io.File
-import androidx.core.content.FileProvider
 
 data class Item(val id:Long=0,val name:String="",val category:String="",val qty:Double=0.0,
  val unit:String="pz",val location:String="",val min:Double=0.0,val price:Double=0.0,
@@ -79,7 +77,7 @@ class DB(c:Context):SQLiteOpenHelper(c,"caste.db",null,2) {
  fun delete(id:Long){val d=writableDatabase;d.beginTransaction();try{d.delete("item_categories","item_id=?",arrayOf(id.toString()));d.delete("items","id=?",arrayOf(id.toString()));d.setTransactionSuccessful()}finally{d.endTransaction()}}
 }
 class MainActivity:Activity(){
- lateinit var db:DB; lateinit var box:LinearLayout; var photo=""; var editId=0L; var csv=""; var scanPhoto:Uri?=null; var pendingCameraUri:Uri?=null
+ lateinit var db:DB; lateinit var box:LinearLayout; var photo=""; var editId=0L; var csv=""; var scanPhoto:Uri?=null
  fun dp(n:Int)= (n*resources.displayMetrics.density).toInt()
  fun t(s:String,size:Float=16f)=TextView(this).apply{text=s;textSize=size;setTextColor(0xff302820.toInt());setPadding(4,dp(7),4,dp(7))}
  fun b(s:String,f:()->Unit)=Button(this).apply{text=s;setOnClickListener{f()}}
@@ -90,8 +88,8 @@ class MainActivity:Activity(){
    val menu=TextView(this).apply{text="☰";textSize=28f;setTextColor(-1);gravity=Gravity.CENTER;setPadding(dp(12),dp(6),dp(12),dp(6))}
    menu.setOnClickListener{v->
     val pop=PopupMenu(this,v)
-    listOf("Home","Aggiungi articolo","Tutti gli articoli","Gestisci categorie","Esporta inventario CSV","Fotografa e conta").forEachIndexed{index,label->pop.menu.add(0,index, index,label)}
-    pop.setOnMenuItemClickListener{item->when(item.itemId){0->home();1->editor(null);2->items();3->categories();4->export();5->photoCount()};true}
+    listOf("Home","Aggiungi articolo","Tutti gli articoli","Gestisci categorie","Esporta inventario CSV","Fotografa e conta","Esporta dati condivisi JSON","Importa dati condivisi JSON").forEachIndexed{index,label->pop.menu.add(0,index, index,label)}
+    pop.setOnMenuItemClickListener{item->when(item.itemId){0->home();1->editor(null);2->items();3->categories();4->export();5->photoCount();6->exportShared();7->importShared()};true}
     pop.show()
    }
    header.addView(menu);root.addView(header)
@@ -100,6 +98,72 @@ class MainActivity:Activity(){
    root.setOnApplyWindowInsetsListener{v,w->v.setPadding(0,w.systemWindowInsetTop,0,w.systemWindowInsetBottom);w}
    setContentView(root)
   }
+ private val exportSharedCode=8171
+ private val importSharedCode=8172
+ fun exportShared(){
+  val intent=Intent(Intent.ACTION_CREATE_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);type="application/json";putExtra(Intent.EXTRA_TITLE,"inventario_caste_condiviso_v1.json")}
+  startActivityForResult(intent,exportSharedCode)
+ }
+ fun importShared(){
+  AlertDialog.Builder(this).setTitle("Importa inventario")
+   .setMessage("L'importazione SOSTITUISCE gli articoli locali. Prima viene creata una copia di sicurezza privata sul telefono. Continuare?")
+   .setNegativeButton("Annulla",null).setPositiveButton("Scegli file"){_,_->
+    val intent=Intent(Intent.ACTION_OPEN_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);type="application/json"}
+    startActivityForResult(intent,importSharedCode)
+   }.show()
+ }
+ private fun sharedSnapshot():JSONObject{
+  val d=db.readableDatabase
+  val cats=JSONArray();d.rawQuery("SELECT name FROM cats ORDER BY name",null).use{c->while(c.moveToNext())cats.put(c.getString(0))}
+  val items=JSONArray()
+  d.rawQuery("SELECT id,name,category,qty,unit,location,min,price,photo,notes FROM items ORDER BY id",null).use{c->while(c.moveToNext()){
+   val id=c.getLong(0);val obj=JSONObject().put("id",id).put("name",c.getString(1)).put("category",c.getString(2))
+    .put("qty",c.getDouble(3)).put("unit",c.getString(4)).put("location",c.getString(5))
+    .put("min",c.getDouble(6)).put("price",c.getDouble(7)).put("photo",c.getString(8)).put("notes",c.getString(9))
+   val assigned=JSONArray();db.assignments(id).forEach{assigned.put(it)};obj.put("categories",assigned);items.put(obj)
+  }}
+  val buys=JSONArray();d.rawQuery("SELECT id,item,date,qty,total,supplier FROM buys ORDER BY id",null).use{c->while(c.moveToNext()){
+   buys.put(JSONObject().put("id",c.getLong(0)).put("item",c.getString(1)).put("date",c.getString(2)).put("qty",c.getDouble(3)).put("total",c.getDouble(4)).put("supplier",c.getString(5)))
+  }}
+  return JSONObject().put("format","inventario-caste-shared").put("version",1).put("categories",cats).put("items",items).put("buys",buys)
+ }
+ private fun importSharedJson(text:String){
+  val data=JSONObject(text)
+  require(data.optString("format")=="inventario-caste-shared" && data.optInt("version")==1){"Formato non riconosciuto"}
+  val cats=data.getJSONArray("categories");val items=data.getJSONArray("items");val buys=data.getJSONArray("buys")
+  for(j in 0 until items.length()){val x=items.getJSONObject(j);require(x.getLong("id")>0 && x.getString("name").isNotBlank());x.getJSONArray("categories")}
+  // Backup prima di qualunque modifica; rimane nella memoria privata dell'app.
+  val backup=java.io.File(filesDir,"inventario_prima_importazione_"+System.currentTimeMillis()+".json")
+  backup.writeText(sharedSnapshot().toString(2),Charsets.UTF_8)
+  val d=db.writableDatabase;d.beginTransaction()
+  try{
+   d.execSQL("DELETE FROM item_categories");d.execSQL("DELETE FROM items");d.execSQL("DELETE FROM buys");d.execSQL("DELETE FROM cats")
+   for(j in 0 until cats.length())d.execSQL("INSERT OR IGNORE INTO cats(name) VALUES(?)",arrayOf(cats.getString(j)))
+   for(j in 0 until items.length()){
+    val x=items.getJSONObject(j)
+    d.execSQL("INSERT INTO items(id,name,category,qty,unit,location,min,price,photo,notes) VALUES(?,?,?,?,?,?,?,?,?,?)",arrayOf(x.getLong("id"),x.getString("name"),x.optString("category"),x.optDouble("qty"),x.optString("unit","pz"),x.optString("location"),x.optDouble("min"),x.optDouble("price"),x.optString("photo"),x.optString("notes")))
+    val assigned=x.getJSONArray("categories")
+    for(k in 0 until assigned.length())d.execSQL("INSERT OR IGNORE INTO item_categories(item_id,category) VALUES(?,?)",arrayOf(x.getLong("id"),assigned.getString(k)))
+   }
+   for(j in 0 until buys.length()){
+    val x=buys.getJSONObject(j)
+    d.execSQL("INSERT INTO buys(id,item,date,qty,total,supplier) VALUES(?,?,?,?,?,?)",arrayOf(x.getLong("id"),x.optString("item"),x.optString("date"),x.optDouble("qty"),x.optDouble("total"),x.optString("supplier")))
+   }
+   d.setTransactionSuccessful()
+  }finally{d.endTransaction()}
+ }
+ @Deprecated("Activity result API")
+ override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){
+  super.onActivityResult(requestCode,resultCode,data)
+  if(requestCode==41 && resultCode==RESULT_OK){data?.data?.let{u->try{contentResolver.takePersistableUriPermission(u,Intent.FLAG_GRANT_READ_URI_PERMISSION)}catch(_:Exception){};photo=u.toString();Toast.makeText(this,"Foto associata",Toast.LENGTH_SHORT).show()};return}
+  if(requestCode==43 && resultCode==RESULT_OK){data?.data?.let{scanPhoto=it;photoCount()};return}
+  if(requestCode==42 && resultCode==RESULT_OK){data?.data?.let{contentResolver.openOutputStream(it)?.bufferedWriter()?.use{w->w.write(csv)};Toast.makeText(this,"CSV esportato",Toast.LENGTH_SHORT).show()};return}
+  if(resultCode!=Activity.RESULT_OK || data?.data==null)return
+  try{
+   if(requestCode==exportSharedCode){contentResolver.openOutputStream(data.data!!)?.use{it.write(sharedSnapshot().toString(2).toByteArray(Charsets.UTF_8))}?:error("Impossibile scrivere il file");Toast.makeText(this,"Esportazione completata",Toast.LENGTH_LONG).show()}
+   if(requestCode==importSharedCode){val json=contentResolver.openInputStream(data.data!!)?.bufferedReader()?.use{it.readText()}?:error("Impossibile leggere il file");importSharedJson(json);home();Toast.makeText(this,"Importazione completata",Toast.LENGTH_LONG).show()}
+  }catch(e:Exception){AlertDialog.Builder(this).setTitle("Operazione non riuscita").setMessage(e.message?:"Errore sconosciuto").setPositiveButton("OK",null).show()}
+ }
  override fun onCreate(s:Bundle?){super.onCreate(s);db=DB(this);home()}
  fun iconFor(name:String,category:String):String {
   val v=(name+" "+category).lowercase(Locale.ROOT)
@@ -317,7 +381,7 @@ class MainActivity:Activity(){
   })
   box.addView(b("Annulla"){home()})
  }
- override fun onActivityResult(r:Int,c:Int,d:Intent?){super.onActivityResult(r,c,d);if(r==41&&c==RESULT_OK){d?.data?.let{u->try{contentResolver.takePersistableUriPermission(u,Intent.FLAG_GRANT_READ_URI_PERMISSION)}catch(_:Exception){};photo=u.toString();Toast.makeText(this,"Foto associata",Toast.LENGTH_SHORT).show()}};if(r==43&&c==RESULT_OK){d?.data?.let{scanPhoto=it;photoCount()}};if(r==44){if(c==RESULT_OK){scanPhoto=pendingCameraUri;photoCount()}else{pendingCameraUri=null}};if(r==42&&c==RESULT_OK)d?.data?.let{contentResolver.openOutputStream(it)?.bufferedWriter()?.use{w->w.write(csv)};Toast.makeText(this,"CSV esportato",Toast.LENGTH_SHORT).show()}}
+ 
 
  data class ScanResult(val name:String,val qty:Int,val category:String)
  fun photoCount(){
@@ -327,19 +391,7 @@ class MainActivity:Activity(){
   val key=EditText(this).apply{hint="Chiave API Gemini (Google AI Studio)";setText(prefs.getString("key", ""));inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD}
   box.addView(t("Chiave API Gemini gratuita (necessaria solo per l'analisi)"));box.addView(key)
   box.addView(b("Salva chiave sul telefono"){prefs.edit().putString("key",key.text.toString().trim()).apply();Toast.makeText(this,"Chiave memorizzata localmente",Toast.LENGTH_SHORT).show()})
-  box.addView(b("📷 Scatta fotografia"){
-   try{
-    val file=File.createTempFile("inventario_foto_", ".jpg",cacheDir)
-    val uri=FileProvider.getUriForFile(this,"${packageName}.fileprovider",file)
-    pendingCameraUri=uri
-    val intent=Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply{
-     putExtra(android.provider.MediaStore.EXTRA_OUTPUT,uri)
-     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-    }
-    startActivityForResult(intent,44)
-   }catch(e:Exception){Toast.makeText(this,"Fotocamera non disponibile: ${e.message}",Toast.LENGTH_LONG).show()}
-  })
-  box.addView(b("🖼 Scegli dalla galleria"){
+  box.addView(b("📷 Scegli o scatta una fotografia"){
    startActivityForResult(Intent(Intent.ACTION_GET_CONTENT).apply{type="image/*";addCategory(Intent.CATEGORY_OPENABLE)},43)
   })
   if(scanPhoto!=null){
@@ -363,24 +415,7 @@ class MainActivity:Activity(){
       val cats=db.cats().filter{it!="Bicicletta"}.joinToString(", ")
       val prompt="Analizza la foto di articoli di un laboratorio. Identifica gruppi di oggetti diversi e prova a contare solo quelli visibili. Non inventare misure o caratteristiche non verificabili. Restituisci SOLO JSON valido con struttura {\"items\":[{\"name\":\"nome italiano\",\"qty\":1,\"category\":\"Minuteria\"}]}. Categorie disponibili: $cats. Se il conteggio è incerto, proponi una stima che l'utente controllerà."
       val body=JSONObject().put("contents",JSONArray().put(JSONObject().put("parts",JSONArray().put(JSONObject().put("text",prompt)).put(JSONObject().put("inline_data",JSONObject().put("mime_type","image/jpeg").put("data",encoded)))))).put("generationConfig",JSONObject().put("responseMimeType","application/json"))
-      // Recupera i modelli disponibili per questa chiave invece di usare un nome obsoleto.
-      val modelsConn=(URL("https://generativelanguage.googleapis.com/v1beta/models").openConnection() as HttpsURLConnection)
-      modelsConn.connectTimeout=20000;modelsConn.readTimeout=30000
-      modelsConn.setRequestProperty("x-goog-api-key",apiKey)
-      val modelsCode=modelsConn.responseCode
-      val modelsResponse=(if(modelsCode in 200..299)modelsConn.inputStream else modelsConn.errorStream)?.bufferedReader()?.use{it.readText()}?:""
-      if(modelsCode !in 200..299)error("Impossibile ottenere i modelli Gemini (HTTP $modelsCode): ${modelsResponse.take(160)}")
-      val models=JSONObject(modelsResponse).optJSONArray("models")?:JSONArray()
-      val available=(0 until models.length()).mapNotNull{idx->
-       val obj=models.getJSONObject(idx)
-       val methods=obj.optJSONArray("supportedGenerationMethods")?:JSONArray()
-       if((0 until methods.length()).any{methods.optString(it)=="generateContent"})obj.optString("name") else null
-      }
-      val preferred=listOf("models/gemini-3-flash-preview","models/gemini-2.5-flash","models/gemini-2.5-flash-lite")
-      val model=preferred.firstOrNull{available.contains(it)}
-       ?:available.firstOrNull{it.contains("flash")&&!it.contains("image")&&!it.contains("live")}
-       ?:error("Nessun modello Gemini Flash disponibile per questa chiave")
-      val conn=(URL("https://generativelanguage.googleapis.com/v1beta/$model:generateContent").openConnection() as HttpsURLConnection)
+      val conn=(URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent").openConnection() as HttpsURLConnection)
       conn.requestMethod="POST";conn.connectTimeout=20000;conn.readTimeout=60000;conn.doOutput=true
       conn.setRequestProperty("Content-Type","application/json");conn.setRequestProperty("x-goog-api-key",apiKey)
       conn.outputStream.use{it.write(body.toString().toByteArray(Charsets.UTF_8))}
